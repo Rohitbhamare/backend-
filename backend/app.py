@@ -16,13 +16,16 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+
 app = Flask(__name__)
 
-# Enable CORS for your frontend and localhost (if testing locally)
+# ✅ Correct way to enable CORS
 CORS(app, resources={r"/*": {"origins": [
     "https://enchanting-biscochitos-2ee8a8.netlify.app",
     "http://localhost:3000"
 ]}}, supports_credentials=True)
+
 
 # Global variables
 model = None
