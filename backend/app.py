@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from database import db_instance
+from database import db_instance  # Ensure you have a working database.py
 
 # Load environment variables
 load_dotenv()
@@ -18,45 +18,38 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Enable CORS for your frontend domain
-CORS(app, resources={r"/*": {"origins": "https://enchanting-biscochitos-2ee8a8.netlify.app"}}, supports_credentials=True)
+# Enable CORS for your frontend and localhost (if testing locally)
+CORS(app, resources={r"/*": {"origins": [
+    "https://enchanting-biscochitos-2ee8a8.netlify.app",
+    "http://localhost:3000"
+]}}, supports_credentials=True)
 
-# Global variables for model and preprocessor
+# Global variables
 model = None
 preprocessor = None
 dataset_info = None
 
 def load_model_and_preprocessor():
-    """Load the trained model and preprocessor"""
     global model, preprocessor, dataset_info
     try:
         with open('model.pkl', 'rb') as f:
             model = pickle.load(f)
-
         with open('preprocessor.pkl', 'rb') as f:
             preprocessor = pickle.load(f)
-
         with open('dataset_info.pkl', 'rb') as f:
             dataset_info = pickle.load(f)
-
         logger.info("Model and preprocessor loaded successfully")
-
-    except FileNotFoundError as e:
-        logger.error(f"Model files not found: {e}")
-        logger.info("Please run the training script first to generate model files")
     except Exception as e:
-        logger.error(f"Error loading model: {e}")
+        logger.error(f"Error loading model or preprocessor: {e}")
 
 def preprocess_input(data):
-    """Preprocess input data for prediction"""
     try:
         df = pd.DataFrame([data])
         current_year = datetime.now().year
         df['car_age'] = current_year - df['year']
 
-        required_features = ['make', 'model', 'year', 'fuel', 'kms_driven',
+        required_features = ['make', 'model', 'year', 'fuel', 'kms_driven', 
                              'transmission', 'owner', 'location', 'car_age']
-
         for feature in required_features:
             if feature not in df.columns and feature != 'car_age':
                 df[feature] = ''
@@ -66,9 +59,8 @@ def preprocess_input(data):
             return processed_data
         else:
             return df.select_dtypes(include=[np.number]).fillna(0).values
-
     except Exception as e:
-        logger.error(f"Error in preprocessing: {e}")
+        logger.error(f"Preprocessing error: {e}")
         raise
 
 @app.route('/predict', methods=['POST'])
@@ -78,7 +70,7 @@ def predict_price():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
 
-        required_fields = ['make', 'model', 'year', 'fuel', 'kms_driven',
+        required_fields = ['make', 'model', 'year', 'fuel', 'kms_driven', 
                            'transmission', 'owner', 'location']
         for field in required_fields:
             if field not in data or not data[field]:
@@ -90,48 +82,29 @@ def predict_price():
         except ValueError:
             return jsonify({'error': 'Invalid numeric values'}), 400
 
-        if not model:
+        if model:
+            processed_data = preprocess_input(data)
+            prediction = model.predict(processed_data)
+            predicted_price = float(prediction[0])
+        else:
             base_price = 500000
             current_year = datetime.now().year
             age = current_year - data['year']
             depreciation = 0.15 * age
             km_factor = max(0.3, 1 - (data['kms_driven'] / 200000))
-
-            premium_brands = ['Toyota', 'Honda', 'BMW', 'Mercedes', 'Audi']
-            brand_multiplier = 1.3 if data['make'] in premium_brands else 1.0
-
-            fuel_multipliers = {
-                'Petrol': 1.0,
-                'Diesel': 1.1,
-                'Electric': 1.5,
-                'CNG': 0.9,
-                'LPG': 0.85
-            }
-            fuel_multiplier = fuel_multipliers.get(data['fuel'], 1.0)
-
+            brand_multiplier = 1.3 if data['make'] in ['Toyota', 'Honda', 'BMW', 'Mercedes', 'Audi'] else 1.0
+            fuel_multiplier = {'Petrol': 1.0, 'Diesel': 1.1, 'Electric': 1.5, 'CNG': 0.9, 'LPG': 0.85}.get(data['fuel'], 1.0)
             predicted_price = base_price * (1 - depreciation) * km_factor * brand_multiplier * fuel_multiplier
             predicted_price = max(50000, predicted_price)
 
-        else:
-            processed_data = preprocess_input(data)
-            prediction = model.predict(processed_data)
-            predicted_price = float(prediction[0])
-
-        if predicted_price >= 100000:
-            formatted_price = f"₹{predicted_price/100000:.1f} Lakhs"
-        else:
-            formatted_price = f"₹{predicted_price:,.0f}"
-
-        confidence_range = predicted_price * 0.15
-        confidence = f"± ₹{confidence_range:,.0f}"
-
+        formatted_price = f"₹{predicted_price/100000:.1f} Lakhs" if predicted_price >= 100000 else f"₹{predicted_price:,.0f}"
+        confidence = f"± ₹{predicted_price * 0.15:,.0f}"
         market_analysis = [
             f"Car age: {datetime.now().year - data['year']} years affects pricing significantly",
             f"High mileage vehicles (>{data['kms_driven']:,} km) typically see reduced values",
             f"{data['fuel']} vehicles have specific market demand patterns",
             f"{data['location']} market conditions influence final pricing"
         ]
-
         result = {
             'predicted_price': formatted_price,
             'confidence': confidence,
@@ -140,7 +113,7 @@ def predict_price():
         }
 
         db_instance.log_prediction(data, result)
-        logger.info(f"Prediction made: {formatted_price} for {data['make']} {data['model']}")
+        logger.info(f"Prediction: {formatted_price} for {data['make']} {data['model']}")
         return jsonify(result)
 
     except Exception as e:
@@ -153,14 +126,12 @@ def get_car_makes():
         if dataset_info and 'makes' in dataset_info:
             makes = dataset_info['makes']
         else:
-            makes = [
-                'Maruti', 'Hyundai', 'Honda', 'Toyota', 'Tata', 'Mahindra',
-                'Ford', 'Volkswagen', 'Chevrolet', 'Nissan', 'Renault',
-                'BMW', 'Mercedes-Benz', 'Audi', 'Skoda', 'Fiat'
-            ]
+            makes = ['Maruti', 'Hyundai', 'Honda', 'Toyota', 'Tata', 'Mahindra',
+                     'Ford', 'Volkswagen', 'Chevrolet', 'Nissan', 'Renault',
+                     'BMW', 'Mercedes-Benz', 'Audi', 'Skoda', 'Fiat']
         return jsonify({'makes': sorted(makes)})
     except Exception as e:
-        logger.error(f"Error fetching makes: {e}")
+        logger.error(f"Fetch makes error: {e}")
         return jsonify({'error': 'Failed to fetch car makes'}), 500
 
 @app.route('/car-models/<make>', methods=['GET'])
@@ -170,18 +141,17 @@ def get_car_models(make):
             models = dataset_info['models'][make]
         else:
             model_mapping = {
-                'Maruti': ['Swift', 'Baleno', 'Alto', 'Wagon R', 'Dzire', 'Vitara Brezza', 'Ertiga', 'Ciaz'],
-                'Hyundai': ['i20', 'Creta', 'Verna', 'Grand i10', 'Santro', 'Venue', 'Elantra', 'Tucson'],
-                'Honda': ['City', 'Amaze', 'Jazz', 'WR-V', 'Civic', 'CR-V', 'Accord', 'BR-V'],
-                'Toyota': ['Innova', 'Fortuner', 'Corolla', 'Camry', 'Etios', 'Yaris', 'Glanza', 'Urban Cruiser'],
-                'Tata': ['Nexon', 'Harrier', 'Safari', 'Altroz', 'Tigor', 'Tiago', 'Hexa', 'Bolt'],
-                'Mahindra': ['XUV500', 'Scorpio', 'Bolero', 'XUV300', 'Thar', 'KUV100', 'Marazzo', 'Alturas']
+                'Maruti': ['Swift', 'Baleno', 'Alto', 'Wagon R', 'Dzire'],
+                'Hyundai': ['i20', 'Creta', 'Verna'],
+                'Honda': ['City', 'Amaze', 'Jazz'],
+                'Toyota': ['Innova', 'Fortuner', 'Corolla'],
+                'Tata': ['Nexon', 'Harrier'],
+                'Mahindra': ['XUV500', 'Scorpio'],
             }
-            models = model_mapping.get(make, ['Model 1', 'Model 2', 'Model 3'])
-
+            models = model_mapping.get(make, ['Model 1', 'Model 2'])
         return jsonify({'models': sorted(models)})
     except Exception as e:
-        logger.error(f"Error fetching models for {make}: {e}")
+        logger.error(f"Fetch models error for {make}: {e}")
         return jsonify({'error': 'Failed to fetch car models'}), 500
 
 @app.route('/locations', methods=['GET'])
@@ -190,15 +160,10 @@ def get_locations():
         if dataset_info and 'locations' in dataset_info:
             locations = dataset_info['locations']
         else:
-            locations = [
-                'Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune', 'Kolkata',
-                'Hyderabad', 'Ahmedabad', 'Jaipur', 'Lucknow', 'Kanpur',
-                'Nagpur', 'Indore', 'Thane', 'Bhopal', 'Visakhapatnam',
-                'Patna', 'Vadodara', 'Ghaziabad', 'Ludhiana'
-            ]
+            locations = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune']
         return jsonify({'locations': sorted(locations)})
     except Exception as e:
-        logger.error(f"Error fetching locations: {e}")
+        logger.error(f"Fetch locations error: {e}")
         return jsonify({'error': 'Failed to fetch locations'}), 500
 
 @app.route('/stats', methods=['GET'])
@@ -207,7 +172,7 @@ def get_stats():
         stats = db_instance.get_prediction_stats()
         return jsonify(stats)
     except Exception as e:
-        logger.error(f"Error fetching stats: {e}")
+        logger.error(f"Fetch stats error: {e}")
         return jsonify({'error': 'Failed to fetch statistics'}), 500
 
 @app.route('/recent-predictions', methods=['GET'])
@@ -216,7 +181,7 @@ def get_recent_predictions():
         recent = db_instance.get_recent_predictions()
         return jsonify({'recent_predictions': recent})
     except Exception as e:
-        logger.error(f"Error fetching recent predictions: {e}")
+        logger.error(f"Fetch recent predictions error: {e}")
         return jsonify({'error': 'Failed to fetch recent predictions'}), 500
 
 @app.route('/health', methods=['GET'])
